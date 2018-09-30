@@ -15,7 +15,6 @@
 // permissions and limitations under the License.
 
 using System;
-using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -40,8 +39,7 @@ namespace Microsoft.Python.LanguageServer {
 
             _onChanged = onChanged;
 
-            var reduced = ReduceToCommonRoots(paths);
-            foreach (var p in reduced) {
+            foreach (var p in paths) {
                 try {
                     if (!Directory.Exists(p)) {
                         continue;
@@ -62,6 +60,7 @@ namespace Microsoft.Python.LanguageServer {
                     fsw.Deleted += OnChanged;
 
                     _disposableBag
+                        .Add(() => _throttleTimer?.Dispose())
                         .Add(() => fsw.Created -= OnChanged)
                         .Add(() => fsw.Deleted -= OnChanged)
                         .Add(() => fsw.EnableRaisingEvents = false)
@@ -76,14 +75,18 @@ namespace Microsoft.Python.LanguageServer {
             // Throttle calls so we don't get flooded with requests
             // if there is massive change to the file structure.
             lock (_lock) {
-                _changedSinceLastTick = true;
-                _throttleTimer = _throttleTimer ?? new Timer(TimerProc, null, 500, 500);
+                if ((e.ChangeType & WatcherChangeTypes.Created) == WatcherChangeTypes.Created ||
+                    (e.ChangeType & WatcherChangeTypes.Deleted) == WatcherChangeTypes.Deleted) {
+                    _changedSinceLastTick = true;
+                    _throttleTimer = _throttleTimer ?? new Timer(TimerProc, null, 1000, 1000);
+                    _log.TraceMessage($"File system watch: {e.FullPath} changed, changeType {e.ChangeType.ToString()}");
+                }
             }
         }
 
         private void TimerProc(object o) {
             lock (_lock) {
-                if (_changedSinceLastTick) {
+                if (!_changedSinceLastTick) {
                     ThreadPool.QueueUserWorkItem(_ => _onChanged());
                     _throttleTimer?.Dispose();
                     _throttleTimer = null;
@@ -92,28 +95,5 @@ namespace Microsoft.Python.LanguageServer {
             }
         }
         public void Dispose() => _disposableBag.TryDispose();
-
-        private IEnumerable<string> ReduceToCommonRoots(string[] paths) {
-            if (paths.Length == 0) {
-                return paths;
-            }
-
-            var original = paths.OrderBy(s => s.Length).ToList();
-            List<string> reduced = null;
-
-            while (reduced == null || original.Count > reduced.Count) {
-                var shortest = original[0];
-                reduced = new List<string>();
-                reduced.Add(shortest);
-                for (var i = 1; i < original.Count; i++) {
-                    // take all that do not start with the shortest
-                    if (!original[i].StartsWith(shortest)) {
-                        reduced.Add(original[i]);
-                    }
-                }
-                original = reduced;
-            }
-            return reduced;
-        }
     }
 }
