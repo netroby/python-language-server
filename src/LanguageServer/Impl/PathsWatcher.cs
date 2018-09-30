@@ -53,7 +53,7 @@ namespace Microsoft.Python.LanguageServer {
                     var fsw = new System.IO.FileSystemWatcher(p) {
                         IncludeSubdirectories = true,
                         EnableRaisingEvents = true,
-                        NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName
+                        NotifyFilter = NotifyFilters.FileName
                     };
 
                     fsw.Created += OnChanged;
@@ -77,15 +77,19 @@ namespace Microsoft.Python.LanguageServer {
             lock (_lock) {
                 if ((e.ChangeType & WatcherChangeTypes.Created) == WatcherChangeTypes.Created ||
                     (e.ChangeType & WatcherChangeTypes.Deleted) == WatcherChangeTypes.Deleted) {
+                    // Mark as change since last timer tick. We only want to call reload when
+                    // all the files and directories changes are complete.
                     _changedSinceLastTick = true;
                     _throttleTimer = _throttleTimer ?? new Timer(TimerProc, null, 1000, 1000);
-                    _log.TraceMessage($"File system watch: {e.FullPath} changed, changeType {e.ChangeType.ToString()}");
                 }
             }
         }
 
         private void TimerProc(object o) {
             lock (_lock) {
+                // Check if there were no changes since the last tick.
+                // We only want to perform action when all file change 
+                // activities ceased.
                 if (!_changedSinceLastTick) {
                     ThreadPool.QueueUserWorkItem(_ => _onChanged());
                     _throttleTimer?.Dispose();
